@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import dns from "dns";
 import { promisify } from "util";
@@ -17,6 +16,10 @@ const __dirname = path.dirname(__filename);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const APP_URL = process.env.APP_URL || "http://localhost:3000";
+
+if (process.env.VERCEL && (!process.env.APP_URL || process.env.APP_URL.includes('localhost'))) {
+  console.warn("WARNING: APP_URL is not set or points to localhost on Vercel. Google OAuth callbacks will fail.");
+}
 
 const oauth2Client = new google.auth.OAuth2(
   GOOGLE_CLIENT_ID,
@@ -221,12 +224,14 @@ export async function createServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
+    // Only serve static files if NOT on Vercel (Vercel handles this via rewrites)
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {

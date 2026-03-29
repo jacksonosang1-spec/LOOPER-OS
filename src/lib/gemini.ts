@@ -1,9 +1,21 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Lead, LeadAnalysis } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY || GEMINI_API_KEY === 'undefined') {
+  console.error("GEMINI_API_KEY is missing or invalid. Please set it in your environment variables.");
+}
+
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY || '' });
 
 export async function discoverLeads(niche: string, city: string, count: number = 5, latLng?: { latitude: number, longitude: number }): Promise<Partial<Lead>[]> {
+  console.log(`Discovering leads for niche: ${niche} in ${city} (count: ${count})`);
+  
+  if (!GEMINI_API_KEY || GEMINI_API_KEY === 'undefined') {
+    throw new Error("Gemini API key is missing. Please configure it in your environment variables on Vercel.");
+  }
+
   const model = "gemini-3-flash-preview";
   
   const prompt = `Find ${count} ${niche} businesses in ${city} using Google Maps.
@@ -30,98 +42,104 @@ export async function discoverLeads(niche: string, city: string, count: number =
   Do not include any other text outside the code block.
   `;
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      tools: [{ googleMaps: {} }],
-      toolConfig: {
-        includeServerSideToolInvocations: true,
-        retrievalConfig: {
-          latLng: latLng
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        tools: [{ googleMaps: {} }],
+        toolConfig: {
+          includeServerSideToolInvocations: true,
+          retrievalConfig: {
+            latLng: latLng
+          }
         }
-      }
-    },
-  });
-
-  const text = response.text;
-  const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || text.match(/```\n([\s\S]*?)\n```/);
-  let parsedLeads: Partial<Lead>[] = [];
-
-  if (jsonMatch) {
-    try {
-      parsedLeads = JSON.parse(jsonMatch[1]);
-    } catch (e) {
-      console.error("Failed to parse lead discovery JSON", e);
-    }
-  }
-
-  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-  const finalLeads: Partial<Lead>[] = [];
-
-  const verifyEmail = async (email: string): Promise<'verified' | 'unverified' | 'unknown'> => {
-    if (!email) return 'unknown';
-    try {
-      const response = await fetch('/api/verify-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-      const data = await response.json();
-      return data.status || 'unknown';
-    } catch (e) {
-      console.error("Email verification error", e);
-      return 'unknown';
-    }
-  };
-
-  if (groundingChunks) {
-    // Create a map of real businesses found by the tool
-    const realBusinesses = new Map<string, any>();
-    groundingChunks.forEach(chunk => {
-      if (chunk.maps) {
-        realBusinesses.set(chunk.maps.uri, chunk.maps);
-      }
+      },
     });
 
-    // Match parsed leads with real businesses
-    await Promise.all(parsedLeads.map(async (lead) => {
-      if (lead.mapsUrl && realBusinesses.has(lead.mapsUrl)) {
-        const chunk = realBusinesses.get(lead.mapsUrl);
-        const emailStatus = lead.email ? await verifyEmail(lead.email) : 'unknown';
-        
+    console.log("Gemini Response:", response);
+    const text = response.text;
+    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || text.match(/```\n([\s\S]*?)\n```/);
+    let parsedLeads: Partial<Lead>[] = [];
+
+    if (jsonMatch) {
+      try {
+        parsedLeads = JSON.parse(jsonMatch[1]);
+      } catch (e) {
+        console.error("Failed to parse lead discovery JSON", e);
+      }
+    }
+
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    const finalLeads: Partial<Lead>[] = [];
+
+    const verifyEmail = async (email: string): Promise<'verified' | 'unverified' | 'unknown'> => {
+      if (!email) return 'unknown';
+      try {
+        const response = await fetch('/api/verify-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+        const data = await response.json();
+        return data.status || 'unknown';
+      } catch (e) {
+        console.error("Email verification error", e);
+        return 'unknown';
+      }
+    };
+
+    if (groundingChunks) {
+      // Create a map of real businesses found by the tool
+      const realBusinesses = new Map<string, any>();
+      groundingChunks.forEach(chunk => {
+        if (chunk.maps) {
+          realBusinesses.set(chunk.maps.uri, chunk.maps);
+        }
+      });
+
+      // Match parsed leads with real businesses
+      await Promise.all(parsedLeads.map(async (lead) => {
+        if (lead.mapsUrl && realBusinesses.has(lead.mapsUrl)) {
+          const chunk = realBusinesses.get(lead.mapsUrl);
+          const emailStatus = lead.email ? await verifyEmail(lead.email) : 'unknown';
+          
+          finalLeads.push({
+            ...lead,
+            companyName: chunk.title || lead.companyName, // Prioritize tool's title
+            mapsUrl: chunk.uri,
+            emailStatus,
+            reviewSnippets: (chunk.placeAnswerSources as any[])?.map((s: any) => s.reviewSnippets).flat().filter(Boolean)
+          });
+          // Mark as processed
+          realBusinesses.delete(lead.mapsUrl);
+        }
+      }));
+
+      // Add any real businesses that the model missed in its JSON
+      realBusinesses.forEach((chunk, uri) => {
         finalLeads.push({
-          ...lead,
-          companyName: chunk.title || lead.companyName, // Prioritize tool's title
-          mapsUrl: chunk.uri,
-          emailStatus,
+          companyName: chunk.title || "Unknown Business",
+          mapsUrl: uri,
+          websiteUrl: "",
+          phone: "",
+          address: "",
+          email: "",
           reviewSnippets: (chunk.placeAnswerSources as any[])?.map((s: any) => s.reviewSnippets).flat().filter(Boolean)
         });
-        // Mark as processed
-        realBusinesses.delete(lead.mapsUrl);
-      }
-    }));
-
-    // Add any real businesses that the model missed in its JSON
-    realBusinesses.forEach((chunk, uri) => {
-      finalLeads.push({
-        companyName: chunk.title || "Unknown Business",
-        mapsUrl: uri,
-        websiteUrl: "",
-        phone: "",
-        address: "",
-        email: "",
-        reviewSnippets: (chunk.placeAnswerSources as any[])?.map((s: any) => s.reviewSnippets).flat().filter(Boolean)
       });
-    });
-  } else if (parsedLeads.length > 0) {
-    // If no grounding chunks but we have parsed leads, we must be careful.
-    // However, the user wants 100% real data from Maps. 
-    // If there are no chunks, the model likely hallucinated the whole thing.
-    console.warn("No grounding chunks found. Discarding potentially hallucinated leads.");
-  }
+    } else if (parsedLeads.length > 0) {
+      // If no grounding chunks but we have parsed leads, we must be careful.
+      // However, the user wants 100% real data from Maps. 
+      // If there are no chunks, the model likely hallucinated the whole thing.
+      console.warn("No grounding chunks found. Discarding potentially hallucinated leads.");
+    }
 
-  return finalLeads;
+    return finalLeads;
+  } catch (error) {
+    console.error("Gemini lead discovery error:", error);
+    throw error;
+  }
 }
 
 export async function analyzeWebsite(url: string, companyName: string): Promise<LeadAnalysis & { email?: string, websiteUrl?: string }> {

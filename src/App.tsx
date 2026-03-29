@@ -304,6 +304,12 @@ export default function App() {
       }
 
       const discovered = await discoverLeads(discoveryNiche, discoveryCity, discoveryCount, latLng);
+      
+      if (!discovered || discovered.length === 0) {
+        alert("No leads were found for this niche and city. Try adjusting your search criteria.");
+        return;
+      }
+
       let newLeads: Lead[] = discovered.map(d => ({
         id: Math.random().toString(36).substr(2, 9),
         companyName: d.companyName || 'Unknown',
@@ -340,6 +346,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Discovery failed", error);
+      alert(`Discovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsDiscovering(false);
     }
