@@ -1,0 +1,5 @@
+{
+  "name": "LOOPER OS - Client Acquisition System",
+  "description": "High-end, automated client acquisition engine for web design agencies, featuring AI-powered lead scoring and personalized outreach automation.",
+  "requestFramePermissions": ["geolocation"]
+}
