@@ -9,6 +9,27 @@ if (!GEMINI_API_KEY || GEMINI_API_KEY === 'undefined') {
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY || '' });
 
+async function withRetry<T>(fn: () => Promise<T>, maxRetries: number = 3): Promise<T> {
+  let lastError: any;
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const isRateLimit = error?.message?.includes('429') || error?.status === 429 || error?.message?.includes('RESOURCE_EXHAUSTED');
+      
+      if (isRateLimit && i < maxRetries) {
+        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+        console.warn(`Rate limit hit. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 export async function discoverLeads(niche: string, city: string, count: number = 5, latLng?: { latitude: number, longitude: number }): Promise<Partial<Lead>[]> {
   console.log(`Discovering leads for niche: ${niche} in ${city} (count: ${count})`);
   
@@ -43,7 +64,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model,
       contents: prompt,
       config: {
@@ -55,7 +76,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
           }
         }
       },
-    });
+    }));
 
     console.log("Gemini Response:", response);
     const text = response.text;
@@ -171,7 +192,7 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
     }
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model,
     contents: prompt,
     config: {
@@ -179,7 +200,7 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
       tools: [{ googleSearch: {} }],
       toolConfig: { includeServerSideToolInvocations: true }
     },
-  });
+  }));
 
   const analysis = JSON.parse(response.text);
   
@@ -243,10 +264,10 @@ export async function generateOutreach(lead: Lead): Promise<string> {
     Return ONLY the email body.
   `;
 
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model,
     contents: prompt,
-  });
+  }));
 
   return response.text;
 }
