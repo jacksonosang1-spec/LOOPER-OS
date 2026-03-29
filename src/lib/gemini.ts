@@ -222,7 +222,7 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
   return analysis;
 }
 
-export async function generateOutreach(lead: Lead): Promise<string> {
+export async function generateOutreach(lead: Lead): Promise<{ subject: string, body: string }> {
   const model = "gemini-3-flash-preview";
   
   const analysisDetails = lead.analysis ? `
@@ -248,28 +248,44 @@ export async function generateOutreach(lead: Lead): Promise<string> {
     ${analysisDetails}
     
     Outreach Structure & Style (Follow this EXACTLY):
-    1. Greeting: "Hello [Name]," (Use ${lead.contactName || 'there'})
-    2. Intro: 
+    1. Subject Line: High-impact, curiosity-driven, personalized.
+    2. Greeting: "Hello [Name]," (Use ${lead.contactName || 'there'})
+    3. Intro: 
        - If the lead is in Lagos or Nigeria: "My name is Jackson, a Lagos-based web designer."
        - If the lead is international: "My name is Jackson, a web designer specializing in [Niche] solutions."
        - Follow with: "I've been following ${lead.companyName}'s incredible work in [Niche]... [Acknowledge their impact/service]."
-    3. Observation: "While your services are exceptional, I noticed a few areas on your website that... Specifically, [Reference 2-3 specific pain points from the analysis summary/scores]..."
-    4. Value Prop: "I specialize in building fast, mobile-first websites that act as 24/7 sales engines, converting visitors into valuable leads and appointments. Imagine a seamless online experience that not only showcases ${lead.companyName}'s excellence but also makes it incredibly easy for [Target Audience] to connect with you, anytime, anywhere."
-    5. Demo Offer: "To illustrate this, I've put together a pre-built demo concept tailored for ${lead.companyName}, demonstrating how these improvements could look and function. It addresses the identified pain points and highlights a modern, [Niche]-centric design."
-    6. CTA: "Would you be open to a brief 10-minute call next week to see this demo concept?"
-    7. Sign-off: "Best regards, Jackson"
+    4. Observation: "While your services are exceptional, I noticed a few areas on your website that... Specifically, [Reference 2-3 specific pain points from the analysis summary/scores]..."
+    5. Value Prop: "I specialize in building fast, mobile-first websites that act as 24/7 sales engines, converting visitors into valuable leads and appointments. Imagine a seamless online experience that not only showcases ${lead.companyName}'s excellence but also makes it incredibly easy for [Target Audience] to connect with you, anytime, anywhere."
+    6. Demo Offer: "To illustrate this, I've put together a pre-built demo concept tailored for ${lead.companyName}, demonstrating how these improvements could look and function. It addresses the identified pain points and highlights a modern, [Niche]-centric design."
+    7. CTA: "Would you be open to a brief 10-minute call next week to see this demo concept?"
+    8. Sign-off: "Best regards, Jackson"
 
     Tone: Professional, inspiring, and value-first. Do not sound like a generic sales pitch. Use the specific analysis details to prove you've actually looked at their site.
 
-    Return ONLY the email body.
+    IMPORTANT: Return the result as a JSON object with "subject" and "body" keys. 
+    Wrap the JSON in a \`\`\`json code block.
+    Do NOT include any other text outside the code block.
   `;
 
   const response = await withRetry(() => ai.models.generateContent({
     model,
     contents: prompt,
+    config: { responseMimeType: "application/json" }
   }));
 
-  return response.text;
+  try {
+    const result = JSON.parse(response.text);
+    return {
+      subject: result.subject || `Personalized Solution for ${lead.companyName}`,
+      body: result.body || response.text
+    };
+  } catch (e) {
+    console.error("Failed to parse outreach JSON:", e);
+    return {
+      subject: `Personalized Solution for ${lead.companyName}`,
+      body: response.text
+    };
+  }
 }
 
 export async function generateRelumeUrl(lead: Lead): Promise<string> {

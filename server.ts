@@ -79,24 +79,77 @@ export async function createServer() {
     }
   });
 
+  app.post("/api/auth/google/logout", (req, res) => {
+    res.clearCookie("google_tokens", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none"
+    });
+    res.json({ success: true });
+  });
+
   app.get("/api/gmail/status", (req, res) => {
     const tokens = req.cookies.google_tokens;
     res.json({ connected: !!tokens });
   });
 
   app.post("/api/gmail/send", async (req, res) => {
-    const tokens = req.cookies.google_tokens;
-    if (!tokens) {
+    const tokensStr = req.cookies.google_tokens;
+    if (!tokensStr) {
       return res.status(401).json({ error: "Not authenticated with Google" });
     }
 
     const { to, subject, body } = req.body;
     try {
+      const tokens = JSON.parse(tokensStr);
       const client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
-      client.setCredentials(JSON.parse(tokens));
+      client.setCredentials(tokens);
+
+      // Handle token refresh
+      client.on('tokens', (newTokens) => {
+        const updatedTokens = { ...tokens, ...newTokens };
+        res.cookie("google_tokens", JSON.stringify(updatedTokens), {
+          httpOnly: true,
+          secure: true,
+          sameSite: "none",
+          maxAge: 30 * 24 * 60 * 60 * 1000
+        });
+      });
 
       const gmail = google.gmail({ version: "v1", auth: client });
       
+      const htmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+    .container { max-width: 600px; margin: 20px auto; padding: 40px; border: 1px solid #eee; border-radius: 12px; background-color: #ffffff; }
+    .header { margin-bottom: 30px; text-align: left; }
+    .logo { font-size: 24px; font-weight: 900; color: #1A1A1A; letter-spacing: -1px; }
+    .content { font-size: 16px; color: #444; }
+    .footer { font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 20px; margin-top: 40px; }
+    .highlight { color: #FF6321; font-weight: bold; }
+  </style>
+</head>
+<body style="background-color: #f9f9f9; padding: 20px;">
+  <div class="container">
+    <div class="header">
+      <div class="logo">LOOPER<span class="highlight">OS</span></div>
+    </div>
+    <div class="content">
+      ${body.replace(/\n/g, '<br>')}
+    </div>
+    <div class="footer">
+      Sent via <strong>LOOPER OS</strong> - AI-Powered Outreach Intelligence<br>
+      &copy; ${new Date().getFullYear()} LOOPER OS. All rights reserved.<br>
+      Lagos, Nigeria | Specialized Web Solutions
+    </div>
+  </div>
+</body>
+</html>
+      `;
+
       const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
       const messageParts = [
         `To: ${to}`,
@@ -104,7 +157,7 @@ export async function createServer() {
         'MIME-Version: 1.0',
         `Subject: ${utf8Subject}`,
         '',
-        body,
+        htmlBody,
       ];
       const message = messageParts.join('\n');
 

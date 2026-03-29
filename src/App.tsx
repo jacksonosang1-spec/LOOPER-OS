@@ -26,6 +26,7 @@ import {
   Edit
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Toaster, toast } from 'sonner';
 import { 
   Radar, 
   RadarChart, 
@@ -43,12 +44,36 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { Lead, LeadAnalysis } from './types';
+import { Lead, LeadAnalysis, ActivityLog } from './types';
 import { analyzeWebsite, generateOutreach, discoverLeads, generateRelumeUrl } from './lib/gemini';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+const NICHES = [
+  "Lawyers & Legal Firms",
+  "Medical & Dental Clinics",
+  "Contractors / Remodelers",
+  "Real Estate Agents / Brokers / Property Management",
+  "Finance / Insurance Advisors",
+  "Pool Cleaners / Pool Builders",
+  "Painters (Residential / Commercial)",
+  "Roofers / Home Repair Services",
+  "Electricians / Plumbers / HVAC",
+  "Restaurants & Food Delivery",
+  "Coaches & Course Creators",
+  "E-Commerce & Local Retail Stores",
+  "Fitness Trainers / Gyms / Yoga Studios",
+  "SaaS & Tech Startups",
+  "Construction & Home Improvement",
+  "Landscapers & Lawn Care",
+  "Photographers & Videographers",
+  "Beauty Salons / Spas / Barbers",
+  "Wedding / Event Planners",
+  "Nonprofits / Churches",
+  "Other"
+];
 
 // Mock initial data
 const INITIAL_LEADS: Lead[] = [
@@ -100,6 +125,20 @@ export default function App() {
     localStorage.setItem('looper_leads', JSON.stringify(leads));
   }, [leads]);
 
+  const addActivityLog = (leadId: string, type: ActivityLog['type'], content: string) => {
+    const newLog: ActivityLog = {
+      id: Math.random().toString(36).substr(2, 9),
+      type,
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    setLeads(prev => prev.map(l => l.id === leadId ? {
+      ...l,
+      activityHistory: [newLog, ...(l.activityHistory || [])],
+      lastActionDate: new Date().toISOString().split('T')[0]
+    } : l));
+  };
+
   const checkGmailStatus = async () => {
     try {
       const response = await fetch('/api/gmail/status');
@@ -139,7 +178,7 @@ export default function App() {
   };
 
   const handleSendGmail = async () => {
-    if (!selectedLead || !outreachScript) return;
+    if (!selectedLead || !outreachScript || !outreachSubject) return;
     if (!isGmailConnected) {
       handleConnectGmail();
       return;
@@ -152,27 +191,29 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: selectedLead.email,
-          subject: `Outreach for ${selectedLead.companyName}`,
-          body: outreachScript.replace(/\n/g, '<br>')
+          subject: outreachSubject,
+          body: outreachScript
         })
       });
 
       if (response.ok) {
         setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, status: 'Outreach Sent' } : l));
+        addActivityLog(selectedLead.id, 'Outreach', `Email sent: ${outreachSubject}`);
         setOutreachScript(null);
-        alert('Email sent successfully!');
+        setOutreachSubject(null);
+        toast.success('Email sent successfully!');
       } else {
         const data = await response.json();
         if (response.status === 401) {
           setIsGmailConnected(false);
           handleConnectGmail();
         } else {
-          alert(`Failed to send email: ${data.error}`);
+          toast.error(`Failed to send email: ${data.error}`);
         }
       }
     } catch (error) {
       console.error('Failed to send email:', error);
-      alert('An error occurred while sending the email.');
+      toast.error('An error occurred while sending the email.');
     } finally {
       setIsSendingEmail(false);
     }
@@ -183,7 +224,8 @@ export default function App() {
   const [analyzingCount, setAnalyzingCount] = useState(0);
   const isAnalyzing = analyzingCount > 0;
   const [isDiscovering, setIsDiscovering] = useState(false);
-  const [discoveryNiche, setDiscoveryNiche] = useState('Web Design');
+  const [selectedNicheOption, setSelectedNicheOption] = useState(NICHES[0]);
+  const [discoveryNiche, setDiscoveryNiche] = useState(NICHES[0]);
   const [discoveryCity, setDiscoveryCity] = useState('Lagos');
   const [discoveryCount, setDiscoveryCount] = useState(5);
   const [excludeUnverified, setExcludeUnverified] = useState(false);
@@ -192,6 +234,15 @@ export default function App() {
   const [isEditingLead, setIsEditingLead] = useState(false);
   const [isGmailConnected, setIsGmailConnected] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+
+  const handleLogoutGmail = async () => {
+    try {
+      await fetch('/api/auth/google/logout', { method: 'POST' });
+      setIsGmailConnected(false);
+    } catch (error) {
+      console.error('Failed to logout from Gmail:', error);
+    }
+  };
   const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'settings' | 'crm'>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -277,8 +328,11 @@ export default function App() {
         emailStatus: (analysis as any).emailStatus || l.emailStatus,
         websiteUrl: ((analysis as any).websiteUrl && (analysis as any).websiteUrl !== 'none') ? (analysis as any).websiteUrl : l.websiteUrl
       } : l));
+      addActivityLog(lead.id, 'Analysis', `AI analysis completed. Score: ${finalScore}`);
+      toast.success('Analysis completed!');
     } catch (error) {
       console.error("Analysis failed", error);
+      toast.error('Analysis failed. Please try again.');
     } finally {
       setAnalyzingCount(prev => Math.max(0, prev - 1));
     }
@@ -306,7 +360,7 @@ export default function App() {
       const discovered = await discoverLeads(discoveryNiche, discoveryCity, discoveryCount, latLng);
       
       if (!discovered || discovered.length === 0) {
-        alert("No leads were found for this niche and city. Try adjusting your search criteria.");
+        toast.info("No leads were found for this niche and city. Try adjusting your search criteria.");
         return;
       }
 
@@ -346,24 +400,29 @@ export default function App() {
       }
     } catch (error) {
       console.error("Discovery failed", error);
-      alert(`Discovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      toast.error(`Discovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsDiscovering(false);
     }
   };
 
   const [outreachScript, setOutreachScript] = useState<string | null>(null);
+  const [outreachSubject, setOutreachSubject] = useState<string | null>(null);
   const [isGeneratingOutreach, setIsGeneratingOutreach] = useState(false);
   const [isGeneratingRelume, setIsGeneratingRelume] = useState(false);
 
   const handleGenerateOutreach = async (lead: Lead) => {
     setIsGeneratingOutreach(true);
     try {
-      const script = await generateOutreach(lead);
-      setOutreachScript(script);
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, outreachMessage: script, status: 'Outreach Sent' } : l));
+      const { subject, body } = await generateOutreach(lead);
+      setOutreachScript(body);
+      setOutreachSubject(subject);
+      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, outreachMessage: body, outreachSubject: subject, status: 'Outreach Sent' } : l));
+      addActivityLog(lead.id, 'Outreach', 'Personalized outreach script generated.');
+      toast.success('Outreach script generated!');
     } catch (error) {
       console.error("Outreach generation failed", error);
+      toast.error('Failed to generate outreach script.');
     } finally {
       setIsGeneratingOutreach(false);
     }
@@ -407,6 +466,7 @@ export default function App() {
       setOutreachScript(null);
     }
     setLeadToDelete(null);
+    toast.success('Lead deleted successfully');
   };
 
   return (
@@ -498,13 +558,32 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                     <div className="space-y-2">
                       <label className="text-xs font-bold uppercase tracking-widest text-white/50 ml-1">Target Niche</label>
-                      <input 
-                        type="text" 
-                        value={discoveryNiche}
-                        onChange={(e) => setDiscoveryNiche(e.target.value)}
-                        className="w-full bg-white/10 border border-white/10 rounded-2xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#FF6321] outline-none transition-all"
-                        placeholder="e.g. Dental Clinic"
-                      />
+                      <select 
+                        value={selectedNicheOption}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedNicheOption(val);
+                          if (val !== 'Other') {
+                            setDiscoveryNiche(val);
+                          } else {
+                            setDiscoveryNiche('');
+                          }
+                        }}
+                        className="w-full bg-white/10 border border-white/10 rounded-2xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#FF6321] outline-none transition-all text-white"
+                      >
+                        {NICHES.map(niche => (
+                          <option key={niche} value={niche} className="bg-[#1A1A1A]">{niche}</option>
+                        ))}
+                      </select>
+                      {selectedNicheOption === 'Other' && (
+                        <input 
+                          type="text" 
+                          value={discoveryNiche}
+                          onChange={(e) => setDiscoveryNiche(e.target.value)}
+                          className="w-full bg-white/10 border border-white/10 rounded-2xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#FF6321] outline-none transition-all mt-2"
+                          placeholder="Type specific niche..."
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs font-bold uppercase tracking-widest text-white/50 ml-1">Location (City)</label>
@@ -887,20 +966,43 @@ export default function App() {
                         >
                           <div className="absolute top-0 right-0 p-4">
                             <button 
-                              onClick={() => setOutreachScript(null)}
+                              onClick={() => {
+                                setOutreachScript(null);
+                                setOutreachSubject(null);
+                              }}
                               className="text-white/50 hover:text-white transition-colors"
                             >
                               <X className="w-5 h-5" />
                             </button>
                           </div>
-                          <h3 className="text-sm font-semibold uppercase tracking-widest text-white/50 mb-4">Personalized Outreach Script</h3>
-                          <pre className="whitespace-pre-wrap font-sans text-lg leading-relaxed">
-                            {outreachScript}
-                          </pre>
+                          <h3 className="text-sm font-semibold uppercase tracking-widest text-white/50 mb-6">Personalized Outreach Editor</h3>
+                          
+                          <div className="space-y-6">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold uppercase tracking-widest text-white/30 ml-1">Subject Line</label>
+                              <input 
+                                type="text"
+                                value={outreachSubject || ''}
+                                onChange={(e) => setOutreachSubject(e.target.value)}
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-lg font-medium focus:ring-2 focus:ring-[#FF6321] outline-none transition-all"
+                              />
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold uppercase tracking-widest text-white/30 ml-1">Email Body</label>
+                              <textarea 
+                                value={outreachScript || ''}
+                                onChange={(e) => setOutreachScript(e.target.value)}
+                                rows={12}
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-lg leading-relaxed focus:ring-2 focus:ring-[#FF6321] outline-none transition-all resize-none"
+                              />
+                            </div>
+                          </div>
+
                           <div className="mt-8 flex gap-4">
                             <button 
                               onClick={() => {
-                                navigator.clipboard.writeText(outreachScript);
+                                navigator.clipboard.writeText(`Subject: ${outreachSubject}\n\n${outreachScript}`);
                               }}
                               className="bg-white text-[#1A1A1A] px-6 py-2 rounded-full text-sm font-bold hover:bg-white/90 transition-all"
                             >
@@ -909,7 +1011,7 @@ export default function App() {
                             <button 
                               onClick={handleSendGmail}
                               disabled={isSendingEmail}
-                              className="bg-white/10 text-white px-6 py-2 rounded-full text-sm font-bold hover:bg-white/20 transition-all flex items-center gap-2"
+                              className="bg-[#FF6321] text-white px-6 py-2 rounded-full text-sm font-bold hover:bg-[#FF6321]/90 transition-all flex items-center gap-2"
                             >
                               {isSendingEmail ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1043,6 +1145,29 @@ export default function App() {
                         <MetricGroup title="SEO & Visibility" icon={<Search />} metrics={selectedLead.analysis.seo} />
                       </div>
                     )}
+
+                    {/* Activity History */}
+                    {selectedLead.activityHistory && selectedLead.activityHistory.length > 0 && (
+                      <div className="mt-12 pt-12 border-t border-[#E5E5E5]">
+                        <h3 className="text-sm font-semibold uppercase tracking-wider text-[#9E9E9E] mb-6">Activity History</h3>
+                        <div className="space-y-4">
+                          {selectedLead.activityHistory.map((log) => (
+                            <div key={log.id} className="flex gap-4">
+                              <div className="w-8 h-8 rounded-full bg-[#F5F5F4] flex items-center justify-center shrink-0">
+                                {log.type === 'Analysis' && <Zap className="w-4 h-4 text-orange-500" />}
+                                {log.type === 'Outreach' && <Mail className="w-4 h-4 text-blue-500" />}
+                                {log.type === 'Status Change' && <Clock className="w-4 h-4 text-green-500" />}
+                                {log.type === 'Note' && <MessageSquare className="w-4 h-4 text-purple-500" />}
+                              </div>
+                              <div>
+                                <p className="text-sm font-medium">{log.content}</p>
+                                <p className="text-xs text-[#9E9E9E]">{new Date(log.timestamp).toLocaleString()}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1126,8 +1251,46 @@ export default function App() {
           )}
 
           {activeTab === 'settings' && (
-            <div className="max-w-2xl bg-white rounded-3xl border border-[#E5E5E5] p-8">
-              <h2 className="text-xl font-bold mb-8">System Configuration</h2>
+            <div className="max-w-2xl space-y-8">
+              <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+                <h2 className="text-xl font-bold mb-8">Integrations</h2>
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between p-6 bg-[#F5F5F4] rounded-2xl">
+                    <div className="flex items-center gap-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <Mail className="w-6 h-6 text-[#1A1A1A]" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold">Gmail API</h3>
+                        <p className="text-sm text-[#4A4A4A]">Send personalized outreach directly from your Gmail account.</p>
+                      </div>
+                    </div>
+                    {isGmailConnected ? (
+                      <div className="flex items-center gap-4">
+                        <span className="text-sm font-medium text-green-600 flex items-center gap-1">
+                          <CheckCircle2 className="w-4 h-4" /> Connected
+                        </span>
+                        <button 
+                          onClick={handleLogoutGmail}
+                          className="px-4 py-2 bg-white border border-[#E5E5E5] rounded-xl text-sm font-bold hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    ) : (
+                      <button 
+                        onClick={handleConnectGmail}
+                        className="px-6 py-2 bg-[#1A1A1A] text-white rounded-xl text-sm font-bold hover:bg-[#333] transition-all"
+                      >
+                        Connect Gmail
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-3xl border border-[#E5E5E5] p-8">
+                <h2 className="text-xl font-bold mb-8">System Configuration</h2>
               <div className="space-y-8">
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold uppercase tracking-wider text-[#9E9E9E]">Automation Rules</h3>
@@ -1152,7 +1315,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
         </div>
       </main>
 
@@ -1242,6 +1406,7 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      <Toaster position="top-right" richColors />
     </div>
   );
 }

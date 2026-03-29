@@ -1,3 +1,10 @@
+export interface ActivityLog {
+  id: string;
+  type: 'Analysis' | 'Outreach' | 'Status Change' | 'Note';
+  content: string;
+  timestamp: string;
+}
+
 export interface Lead {
   id: string;
   companyName: string;
@@ -23,9 +30,11 @@ export interface Lead {
   createdAt: string;
   analysis?: LeadAnalysis;
   outreachMessage?: string;
+  outreachSubject?: string;
   relumeUrl?: string;
   mapsUrl?: string;
   reviewSnippets?: string[];
+  activityHistory?: ActivityLog[];
 }
 
 export interface LeadAnalysis {
