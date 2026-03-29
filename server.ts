@@ -295,11 +295,9 @@ export async function createServer() {
   return app;
 }
 
-if (process.env.NODE_ENV !== "production") {
-  createServer().then(app => {
-    const PORT = 3000;
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
+createServer().then(app => {
+  const PORT = 3000;
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
   });
-}
+});
