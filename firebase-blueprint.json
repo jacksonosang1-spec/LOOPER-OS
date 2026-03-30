@@ -1,0 +1,32 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "A potential client lead",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "websiteUrl": { "type": "string" },
+        "contactName": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string" },
+        "score": { "type": "number" },
+        "priority": { "type": "string" },
+        "websiteStatus": { "type": "string" },
+        "painPoints": { "type": "array", "items": { "type": "string" } },
+        "lastActionDate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "openedAt": { "type": "string" },
+        "isOpened": { "type": "boolean" },
+        "uid": { "type": "string" }
+      },
+      "required": ["companyName", "websiteUrl", "uid"]
+    }
+  },
+  "firestore": {
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Collection of leads"
+    }
+  }
+}

@@ -27,6 +27,9 @@ const oauth2Client = new google.auth.OAuth2(
   `${APP_URL}/auth/google/callback`
 );
 
+// In-memory storage for email opens (since Firebase is currently blocked)
+const openedLeads = new Map<string, string>();
+
 export async function createServer() {
   const app = express();
   app.use(express.json());
@@ -93,13 +96,40 @@ export async function createServer() {
     res.json({ connected: !!tokens });
   });
 
+  // Tracking Pixel Route
+  app.get("/api/track-open/:leadId", (req, res) => {
+    const { leadId } = req.params;
+    if (leadId) {
+      openedLeads.set(leadId, new Date().toISOString());
+      console.log(`Lead ${leadId} opened email at ${openedLeads.get(leadId)}`);
+    }
+    
+    // Return a 1x1 transparent GIF
+    const pixel = Buffer.from(
+      "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      "base64"
+    );
+    res.writeHead(200, {
+      "Content-Type": "image/gif",
+      "Content-Length": pixel.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    });
+    res.end(pixel);
+  });
+
+  app.get("/api/leads/opened-status", (req, res) => {
+    res.json(Object.fromEntries(openedLeads));
+  });
+
   app.post("/api/gmail/send", async (req, res) => {
     const tokensStr = req.cookies.google_tokens;
     if (!tokensStr) {
       return res.status(401).json({ error: "Not authenticated with Google" });
     }
 
-    const { to, subject, body } = req.body;
+    const { to, subject, body, leadId, isInternational } = req.body;
     try {
       const tokens = JSON.parse(tokensStr);
       const client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
@@ -118,6 +148,26 @@ export async function createServer() {
 
       const gmail = google.gmail({ version: "v1", auth: client });
       
+      const trackingPixel = leadId ? `<img src="${APP_URL}/api/track-open/${leadId}" width="1" height="1" style="display:none;" />` : '';
+      
+      const nigeriaFooter = `
+        <div class="footer">
+          Sent via <strong>LOOPER OS</strong> - Powered by DCYPHERNET<br>
+          &copy; ${new Date().getFullYear()} LOOPER OS. All rights reserved.<br>
+          Lagos, Nigeria | Specialized Smart Web Solutions<br>
+          <a href="https://www.dcyphernet.com" style="color: #999; text-decoration: none;">www.dcyphernet.com</a>
+        </div>
+      `;
+
+      const internationalFooter = `
+        <div class="footer">
+          Sent via <strong>LOOPER OS</strong> - Global Client Acquisition Engine<br>
+          &copy; ${new Date().getFullYear()} LOOPER OS. All rights reserved.<br>
+          International Division | Specialized Smart Web Solutions<br>
+          <a href="https://www.dcyphernet.com" style="color: #999; text-decoration: none;">www.dcyphernet.com</a>
+        </div>
+      `;
+
       const htmlBody = `
 <!DOCTYPE html>
 <html>
@@ -129,23 +179,20 @@ export async function createServer() {
     .logo { font-size: 24px; font-weight: 900; color: #1A1A1A; letter-spacing: -1px; }
     .content { font-size: 16px; color: #444; }
     .footer { font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 20px; margin-top: 40px; }
-    .highlight { color: #FF6321; font-weight: bold; }
+    .highlight { color: #4b1e78; font-weight: bold; }
   </style>
 </head>
 <body style="background-color: #f9f9f9; padding: 20px;">
   <div class="container">
     <div class="header">
-      <div class="logo">LOOPER<span class="highlight">OS</span></div>
+      <div class="logo">DCYPHER<span class="highlight">NET</span></div>
     </div>
     <div class="content">
       ${body.replace(/\n/g, '<br>')}
     </div>
-    <div class="footer">
-      Sent via <strong>LOOPER OS</strong> - AI-Powered Outreach Intelligence<br>
-      &copy; ${new Date().getFullYear()} LOOPER OS. All rights reserved.<br>
-      Lagos, Nigeria | Specialized Web Solutions
-    </div>
+    ${isInternational ? internationalFooter : nigeriaFooter}
   </div>
+  ${trackingPixel}
 </body>
 </html>
       `;

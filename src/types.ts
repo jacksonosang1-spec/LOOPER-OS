@@ -28,6 +28,9 @@ export interface Lead {
   painPoints: string[];
   lastActionDate: string;
   createdAt: string;
+  deliveredAt?: string;
+  openedAt?: string;
+  isOpened?: boolean;
   analysis?: LeadAnalysis;
   outreachMessage?: string;
   outreachSubject?: string;
@@ -35,6 +38,7 @@ export interface Lead {
   mapsUrl?: string;
   reviewSnippets?: string[];
   activityHistory?: ActivityLog[];
+  uid: string;
 }
 
 export interface LeadAnalysis {

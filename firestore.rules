@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: leads
+    // Document ID: random string
+    // Fields:
+    //   - companyName: string (required)
+    //   - websiteUrl: string (required)
+    //   - contactName: string
+    //   - email: string
+    //   - status: string
+    //   - score: number
+    //   - priority: string
+    //   - websiteStatus: string
+    //   - painPoints: list
+    //   - lastActionDate: string
+    //   - createdAt: string
+    //   - openedAt: string
+    //   - isOpened: bool
+    //   - uid: string (required, owner)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "jacksonosang1@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidLead(data) {
+      return data.companyName is string && data.companyName.size() > 0 && data.companyName.size() < 200 &&
+             data.websiteUrl is string && data.websiteUrl.size() > 0 && data.websiteUrl.size() < 500 &&
+             data.uid is string && data.uid == request.auth.uid &&
+             (!('score' in data) || data.score is number) &&
+             (!('email' in data) || data.email is string);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /leads/{leadId} {
+      // Only allow users to read their own leads or if they are admin
+      allow read: if isDocOwner() || isAdmin();
+      
+      // Only allow users to create leads for themselves
+      allow create: if isAuthenticated() && 
+                      hasRequiredFields(['companyName', 'websiteUrl', 'uid']) &&
+                      isValidLead(request.resource.data);
+      
+      // Only allow owners or admins to update
+      allow update: if (isDocOwner() || isAdmin()) && 
+                      isValidLead(request.resource.data) &&
+                      request.resource.data.uid == resource.data.uid; // Cannot change owner
+      
+      // Only allow owners or admins to delete
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && request.resource.data.role == 'user';
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin();
+    }
+    
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

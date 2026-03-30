@@ -251,14 +251,15 @@ export async function generateOutreach(lead: Lead): Promise<{ subject: string, b
     1. Subject Line: High-impact, curiosity-driven, personalized.
     2. Greeting: "Hello [Name]," (Use ${lead.contactName || 'there'})
     3. Intro: 
-       - If the lead is in Lagos or Nigeria: "My name is Jackson, a Lagos-based web designer."
-       - If the lead is international: "My name is Jackson, a web designer specializing in [Niche] solutions."
+       - If the lead is in Lagos or Nigeria: "My name is Jackson from DCYPHERNET, a Lagos-based web design agency."
+       - If the lead is international: "My name is Jackson from DCYPHERNET, a web design agency specializing in [Niche] solutions."
        - Follow with: "I've been following ${lead.companyName}'s incredible work in [Niche]... [Acknowledge their impact/service]."
     4. Observation: "While your services are exceptional, I noticed a few areas on your website that... Specifically, [Reference 2-3 specific pain points from the analysis summary/scores]..."
-    5. Value Prop: "I specialize in building fast, mobile-first websites that act as 24/7 sales engines, converting visitors into valuable leads and appointments. Imagine a seamless online experience that not only showcases ${lead.companyName}'s excellence but also makes it incredibly easy for [Target Audience] to connect with you, anytime, anywhere."
+    5. Value Prop: "At DCYPHERNET, we specialize in building fast, mobile-first websites that act as 24/7 sales engines, converting visitors into valuable leads and appointments. Imagine a seamless online experience that not only showcases ${lead.companyName}'s excellence but also makes it incredibly easy for [Target Audience] to connect with you, anytime, anywhere."
     6. Demo Offer: "To illustrate this, I've put together a pre-built demo concept tailored for ${lead.companyName}, demonstrating how these improvements could look and function. It addresses the identified pain points and highlights a modern, [Niche]-centric design."
     7. CTA: "Would you be open to a brief 10-minute call next week to see this demo concept?"
-    8. Sign-off: "Best regards, Jackson"
+    8. Sign-off: "Best regards,\nJackson\nDCYPHERNET"
+    9. Footer: "Add this footer at the very end of the email body:\n\nSent via LOOPER OS - Powered by DCYPHERNET\n© 2026 LOOPER OS. All rights reserved.\nLagos, Nigeria | Specialized Smart Web Solutions\nwww.dcyphernet.com"
 
     Tone: Professional, inspiring, and value-first. Do not sound like a generic sales pitch. Use the specific analysis details to prove you've actually looked at their site.
 

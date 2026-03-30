@@ -19,6 +19,7 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "firebase": "^12.11.0",
     "framer-motion": "^12.38.0",
     "google-auth-library": "^10.6.2",
     "googleapis": "^171.4.0",

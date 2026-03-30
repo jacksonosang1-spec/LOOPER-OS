@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Component, ReactNode } from 'react';
 import { 
   LayoutDashboard, 
   Users, 
@@ -47,8 +47,83 @@ import { twMerge } from 'tailwind-merge';
 import { Lead, LeadAnalysis, ActivityLog } from './types';
 import { analyzeWebsite, generateOutreach, discoverLeads, generateRelumeUrl } from './lib/gemini';
 
+import { 
+  db, 
+  auth, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  collection, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  where, 
+  handleFirestoreError, 
+  OperationType,
+  User
+} from './firebase';
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// Error Boundary Component
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: any;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error) errorMessage = `Firestore Error: ${parsed.error} (${parsed.operationType} on ${parsed.path})`;
+      } catch (e) {
+        errorMessage = this.state.error.message || String(this.state.error);
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#F5F5F4] p-8">
+          <div className="bg-white p-8 rounded-3xl border border-[#E5E5E5] shadow-xl max-w-md w-full text-center">
+            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+              <AlertCircle className="w-8 h-8 text-red-600" />
+            </div>
+            <h2 className="text-xl font-bold mb-4">Application Error</h2>
+            <p className="text-[#9E9E9E] text-sm mb-8">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-[#1A1A1A] text-white py-3 rounded-2xl font-semibold hover:bg-[#333] transition-all"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (this as any).props.children;
+  }
 }
 
 const NICHES = [
@@ -88,8 +163,9 @@ const INITIAL_LEADS: Lead[] = [
     priority: 'Hot',
     websiteStatus: 'poor',
     painPoints: ['Slow load speed', 'Non-responsive', 'No CTA'],
-    lastActionDate: '2026-03-25',
+    lastActionDate: '2026-03-20',
     createdAt: '2026-03-20',
+    uid: 'system',
     analysis: {
       technical: { mobileResponsiveness: 40, pageLoadSpeed: 30, security: 90, outdatedCms: 20, brokenLinks: 80 },
       design: { visualHierarchy: 60, ctaClarity: 20, accessibility: 50, modernLayout: 30, consistency: 70 },
@@ -112,31 +188,69 @@ const INITIAL_LEADS: Lead[] = [
     painPoints: [],
     lastActionDate: '2026-03-28',
     createdAt: '2026-03-28',
+    uid: 'system'
   }
 ];
 
 export default function App() {
-  const [leads, setLeads] = useState<Lead[]>(() => {
-    const saved = localStorage.getItem('looper_leads');
-    return saved ? JSON.parse(saved) : INITIAL_LEADS;
-  });
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [isGmailConnected, setIsGmailConnected] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem('looper_leads', JSON.stringify(leads));
-  }, [leads]);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const addActivityLog = (leadId: string, type: ActivityLog['type'], content: string) => {
+  useEffect(() => {
+    if (!isAuthReady || !user) {
+      setLeads([]);
+      return;
+    }
+
+    const q = query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const leadsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      setLeads(leadsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'leads');
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, user]);
+
+  const addActivityLog = async (leadId: string, type: ActivityLog['type'], content: string) => {
     const newLog: ActivityLog = {
       id: Math.random().toString(36).substr(2, 9),
       type,
       content,
       timestamp: new Date().toISOString(),
     };
-    setLeads(prev => prev.map(l => l.id === leadId ? {
-      ...l,
-      activityHistory: [newLog, ...(l.activityHistory || [])],
-      lastActionDate: new Date().toISOString().split('T')[0]
-    } : l));
+    
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+
+    try {
+      await updateDoc(doc(db, 'leads', leadId), {
+        activityHistory: [newLog, ...(lead.activityHistory || [])],
+        lastActionDate: new Date().toISOString().split('T')[0]
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
+    }
   };
 
   const checkGmailStatus = async () => {
@@ -152,6 +266,43 @@ export default function App() {
   useEffect(() => {
     checkGmailStatus();
   }, []);
+
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+
+    const pollOpenedStatus = async () => {
+      try {
+        const response = await fetch('/api/leads/opened-status');
+        if (response.ok) {
+          const openedData: Record<string, string> = await response.json();
+          
+          for (const [leadId, openedAt] of Object.entries(openedData)) {
+            const lead = leads.find(l => l.id === leadId);
+            if (lead && !lead.isOpened) {
+              const newLog: ActivityLog = {
+                id: Math.random().toString(36).substr(2, 9),
+                type: 'Outreach',
+                content: `Email opened at ${new Date(openedAt).toLocaleString()}`,
+                timestamp: new Date().toISOString(),
+              };
+              
+              await updateDoc(doc(db, 'leads', leadId), {
+                isOpened: true,
+                openedAt,
+                activityHistory: [newLog, ...(lead.activityHistory || [])],
+                lastActionDate: new Date().toISOString().split('T')[0]
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to poll opened status:', error);
+      }
+    };
+
+    const interval = setInterval(pollOpenedStatus, 10000);
+    return () => clearInterval(interval);
+  }, [isAuthReady, user, leads]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -192,12 +343,17 @@ export default function App() {
         body: JSON.stringify({
           to: selectedLead.email,
           subject: outreachSubject,
-          body: outreachScript
+          body: outreachScript,
+          leadId: selectedLead.id,
+          isInternational: !selectedLead.address?.toLowerCase().includes('nigeria')
         })
       });
 
       if (response.ok) {
-        setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, status: 'Outreach Sent' } : l));
+        await updateDoc(doc(db, 'leads', selectedLead.id), {
+          status: 'Outreach Sent',
+          deliveredAt: new Date().toISOString()
+        });
         addActivityLog(selectedLead.id, 'Outreach', `Email sent: ${outreachSubject}`);
         setOutreachScript(null);
         setOutreachSubject(null);
@@ -232,8 +388,6 @@ export default function App() {
   const [autoAnalyze, setAutoAnalyze] = useState(true);
   const [leadToDelete, setLeadToDelete] = useState<string | null>(null);
   const [isEditingLead, setIsEditingLead] = useState(false);
-  const [isGmailConnected, setIsGmailConnected] = useState(false);
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
 
   const handleLogoutGmail = async () => {
     try {
@@ -245,6 +399,8 @@ export default function App() {
   };
   const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'settings' | 'crm'>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
+  const [crmFilterStatus, setCrmFilterStatus] = useState<string>('All');
+  const [crmSortBy, setCrmSortBy] = useState<'score' | 'date' | 'name'>('score');
 
   const selectedLead = useMemo(() => 
     leads.find(l => l.id === selectedLeadId), 
@@ -259,6 +415,19 @@ export default function App() {
     [leads, searchQuery]
   );
 
+  const crmLeads = useMemo(() => {
+    let result = leads;
+    if (crmFilterStatus !== 'All') {
+      result = result.filter(l => l.status === crmFilterStatus);
+    }
+    
+    return [...result].sort((a, b) => {
+      if (crmSortBy === 'score') return (b.score || 0) - (a.score || 0);
+      if (crmSortBy === 'date') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      return a.companyName.localeCompare(b.companyName);
+    });
+  }, [leads, crmFilterStatus, crmSortBy]);
+
   const stats = useMemo(() => ({
     total: leads.length,
     scored: leads.filter(l => l.status !== 'New').length,
@@ -266,11 +435,15 @@ export default function App() {
     outreachSent: leads.filter(l => l.status === 'Outreach Sent').length,
   }), [leads]);
 
-  const handleAddLead = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAddLead = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!user) {
+      toast.error("Please login to add leads.");
+      return;
+    }
     const formData = new FormData(e.currentTarget);
-    const newLead: Lead = {
-      id: Math.random().toString(36).substr(2, 9),
+    const leadId = Math.random().toString(36).substr(2, 9);
+    const newLead: Omit<Lead, 'id'> = {
       companyName: formData.get('companyName') as string,
       websiteUrl: formData.get('websiteUrl') as string,
       contactName: formData.get('contactName') as string,
@@ -282,9 +455,16 @@ export default function App() {
       painPoints: [],
       lastActionDate: new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString().split('T')[0],
+      uid: user.uid
     };
-    setLeads([newLead, ...leads]);
-    setIsAddingLead(false);
+    
+    try {
+      await setDoc(doc(db, 'leads', leadId), newLead);
+      setIsAddingLead(false);
+      toast.success('Lead added successfully!');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `leads/${leadId}`);
+    }
   };
 
   const handleAnalyze = async (lead: Lead) => {
@@ -292,15 +472,11 @@ export default function App() {
     try {
       const analysis = await analyzeWebsite(lead.websiteUrl, lead.companyName);
       
-      // Calculate a weighted score based on the PDF criteria (Full Rubric)
-      // Technical (30%), Business (30%), SEO (25%), Design (15%)
       const techScore = (Object.values(analysis.technical) as number[]).reduce((a, b) => a + b, 0) / 5;
       const businessScore = (Object.values(analysis.business) as number[]).reduce((a, b) => a + b, 0) / 5;
       const seoScore = (Object.values(analysis.seo) as number[]).reduce((a, b) => a + b, 0) / 4;
       const designScore = (Object.values(analysis.design) as number[]).reduce((a, b) => a + b, 0) / 5;
       
-      // Final Score = (Technical × 0.30) + (Business × 0.30) + (SEO × 0.25) + (Design × 0.15)
-      // Higher score = more pain points = hotter lead.
       const finalScore = Math.round(
         (techScore * 0.30) + 
         (businessScore * 0.30) + 
@@ -316,18 +492,18 @@ export default function App() {
       if (!lead.websiteUrl || lead.websiteUrl === 'none') websiteStatus = 'none';
       else if (finalScore >= 40) websiteStatus = 'poor';
 
-      setLeads(prev => prev.map(l => l.id === lead.id ? {
-        ...l,
+      await updateDoc(doc(db, 'leads', lead.id), {
         status: 'Scored',
         score: finalScore,
         priority,
         websiteStatus,
         analysis,
         painPoints: analysis.recommendations.slice(0, 3),
-        email: (analysis as any).email || l.email,
-        emailStatus: (analysis as any).emailStatus || l.emailStatus,
-        websiteUrl: ((analysis as any).websiteUrl && (analysis as any).websiteUrl !== 'none') ? (analysis as any).websiteUrl : l.websiteUrl
-      } : l));
+        email: (analysis as any).email || lead.email,
+        emailStatus: (analysis as any).emailStatus || lead.emailStatus,
+        websiteUrl: ((analysis as any).websiteUrl && (analysis as any).websiteUrl !== 'none') ? (analysis as any).websiteUrl : lead.websiteUrl
+      });
+      
       addActivityLog(lead.id, 'Analysis', `AI analysis completed. Score: ${finalScore}`);
       toast.success('Analysis completed!');
     } catch (error) {
@@ -364,8 +540,7 @@ export default function App() {
         return;
       }
 
-      let newLeads: Lead[] = discovered.map(d => ({
-        id: Math.random().toString(36).substr(2, 9),
+      let newLeads: Omit<Lead, 'id'>[] = discovered.map(d => ({
         companyName: d.companyName || 'Unknown',
         websiteUrl: d.websiteUrl || 'none',
         contactName: 'Business Owner',
@@ -383,21 +558,25 @@ export default function App() {
         lastActionDate: new Date().toISOString().split('T')[0],
         createdAt: new Date().toISOString().split('T')[0],
         mapsUrl: d.mapsUrl,
-        reviewSnippets: d.reviewSnippets
+        reviewSnippets: d.reviewSnippets,
+        uid: user!.uid
       }));
 
       if (excludeUnverified) {
         newLeads = newLeads.filter(l => l.emailStatus !== 'unverified');
       }
 
-      setLeads(prev => [...newLeads, ...prev]);
-
-      // Automate analysis if enabled
-      if (autoAnalyze) {
-        newLeads.forEach(lead => {
-          handleAnalyze(lead);
-        });
+      // Add to Firestore
+      for (const leadData of newLeads) {
+        const leadId = Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, 'leads', leadId), leadData);
+        
+        if (autoAnalyze) {
+          handleAnalyze({ id: leadId, ...leadData } as Lead);
+        }
       }
+      
+      toast.success(`Discovered ${newLeads.length} leads!`);
     } catch (error) {
       console.error("Discovery failed", error);
       toast.error(`Discovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -417,7 +596,13 @@ export default function App() {
       const { subject, body } = await generateOutreach(lead);
       setOutreachScript(body);
       setOutreachSubject(subject);
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, outreachMessage: body, outreachSubject: subject, status: 'Outreach Sent' } : l));
+      
+      await updateDoc(doc(db, 'leads', lead.id), {
+        outreachMessage: body,
+        outreachSubject: subject,
+        status: 'Outreach Sent'
+      });
+      
       addActivityLog(lead.id, 'Outreach', 'Personalized outreach script generated.');
       toast.success('Outreach script generated!');
     } catch (error) {
@@ -432,7 +617,7 @@ export default function App() {
     setIsGeneratingRelume(true);
     try {
       const url = await generateRelumeUrl(lead);
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, relumeUrl: url } : l));
+      await updateDoc(doc(db, 'leads', lead.id), { relumeUrl: url });
     } catch (error) {
       console.error("Relume generation failed", error);
     } finally {
@@ -440,7 +625,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateLead = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleUpdateLead = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedLead) return;
     
@@ -448,25 +633,62 @@ export default function App() {
     const websiteUrl = formData.get('websiteUrl') as string;
     const email = formData.get('email') as string;
     
-    setLeads(prev => prev.map(l => l.id === selectedLead.id ? {
-      ...l,
-      websiteUrl,
-      email,
-      // Reset status if website changed to allow re-analysis
-      status: l.websiteUrl !== websiteUrl ? 'New' : l.status
-    } : l));
-    
-    setIsEditingLead(false);
+    try {
+      await updateDoc(doc(db, 'leads', selectedLead.id), {
+        websiteUrl,
+        email,
+        status: selectedLead.websiteUrl !== websiteUrl ? 'New' : selectedLead.status
+      });
+      setIsEditingLead(false);
+      toast.success('Lead updated!');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedLead.id}`);
+    }
   };
 
-  const handleDeleteLead = (id: string) => {
-    setLeads(prev => prev.filter(l => l.id !== id));
-    if (selectedLeadId === id) {
-      setSelectedLeadId(null);
-      setOutreachScript(null);
+  const handleDeleteLead = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'leads', id));
+      if (selectedLeadId === id) {
+        setSelectedLeadId(null);
+        setOutreachScript(null);
+      }
+      setLeadToDelete(null);
+      toast.success('Lead deleted successfully');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `leads/${id}`);
     }
-    setLeadToDelete(null);
-    toast.success('Lead deleted successfully');
+  };
+
+  const handleExportCSV = () => {
+    const headers = ['ID', 'Company Name', 'Website', 'Contact', 'Email', 'Status', 'Score', 'Priority', 'Created At'];
+    const rows = leads.map(l => [
+      l.id,
+      l.companyName,
+      l.websiteUrl,
+      l.contactName,
+      l.email,
+      l.status,
+      l.score,
+      l.priority,
+      l.createdAt
+    ]);
+    
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(r => r.map(v => `"${v}"`).join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `looper_leads_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success('Leads exported to CSV');
   };
 
   return (
@@ -500,9 +722,26 @@ export default function App() {
           />
         </div>
 
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col gap-4">
+          {user ? (
+            <button 
+              onClick={() => signOut(auth)}
+              title="Logout"
+              className="p-3 rounded-xl text-[#9E9E9E] hover:text-red-600 hover:bg-red-50 transition-all"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          ) : (
+            <button 
+              onClick={() => signInWithPopup(auth, googleProvider)}
+              title="Login"
+              className="p-3 rounded-xl text-[#9E9E9E] hover:text-[#1A1A1A] hover:bg-[#F5F5F4] transition-all"
+            >
+              <Users className="w-6 h-6" />
+            </button>
+          )}
           <div className="w-10 h-10 rounded-full bg-[#E5E5E5] overflow-hidden">
-            <img src="https://picsum.photos/seed/user/100/100" alt="User" referrerPolicy="no-referrer" />
+            <img src={user?.photoURL || "https://picsum.photos/seed/user/100/100"} alt="User" referrerPolicy="no-referrer" />
           </div>
         </div>
       </nav>
@@ -663,7 +902,14 @@ export default function App() {
                           </div>
                           <div>
                             <h3 className="font-medium">{lead.companyName}</h3>
-                            <p className="text-sm text-[#9E9E9E]">{lead.websiteUrl}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm text-[#9E9E9E] truncate max-w-[150px]">{lead.websiteUrl}</p>
+                              {lead.isOpened && (
+                                <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                                  <Mail className="w-2.5 h-2.5" /> OPENED
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-6">
@@ -768,6 +1014,11 @@ export default function App() {
                             <Clock className="w-3 h-3" />
                             {lead.lastActionDate}
                           </span>
+                          {lead.isOpened && (
+                            <span className="flex items-center gap-1 text-green-600 font-bold">
+                              <Mail className="w-3 h-3" /> Opened
+                            </span>
+                          )}
                         </div>
                           <button 
                             onClick={(e) => {
@@ -802,6 +1053,11 @@ export default function App() {
                             <span className="px-3 py-1 bg-[#F5F5F4] rounded-full text-xs font-medium">
                               {selectedLead.status}
                             </span>
+                            {selectedLead.isOpened && (
+                              <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold flex items-center gap-1">
+                                <Mail className="w-3 h-3" /> Opened {new Date(selectedLead.openedAt!).toLocaleDateString()}
+                              </span>
+                            )}
                           </div>
                           <p className="text-[#9E9E9E] flex items-center flex-wrap gap-2">
                             {selectedLead.contactName} {selectedLead.jobTitle && `(${selectedLead.jobTitle})`} • {selectedLead.email || 'No email found'}
@@ -1176,15 +1432,45 @@ export default function App() {
 
           {activeTab === 'crm' && (
             <div className="bg-white rounded-3xl border border-[#E5E5E5] shadow-sm overflow-hidden">
-              <div className="p-8 border-b border-[#E5E5E5] flex items-center justify-between bg-[#F5F5F4]/50">
+              <div className="p-8 border-b border-[#E5E5E5] flex flex-col md:flex-row md:items-center justify-between bg-[#F5F5F4]/50 gap-4">
                 <div>
                   <h2 className="text-xl font-bold">Lean CRM</h2>
                   <p className="text-sm text-[#9E9E9E]">Real-time sync with Google Sheets</p>
                 </div>
-                <div className="flex gap-2">
-                  <button className="px-4 py-2 bg-white border border-[#E5E5E5] rounded-xl text-sm font-medium hover:bg-[#F5F5F4] transition-all flex items-center gap-2">
+                <div className="flex flex-wrap gap-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-[#9E9E9E]">Filter</label>
+                    <select 
+                      value={crmFilterStatus}
+                      onChange={(e) => setCrmFilterStatus(e.target.value)}
+                      className="bg-white border border-[#E5E5E5] rounded-xl px-3 py-1.5 text-xs focus:ring-2 focus:ring-[#1A1A1A] outline-none"
+                    >
+                      <option value="All">All Statuses</option>
+                      <option value="New">New</option>
+                      <option value="Scored">Scored</option>
+                      <option value="Outreach Sent">Outreach Sent</option>
+                      <option value="Replied">Replied</option>
+                      <option value="Meeting Booked">Meeting Booked</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-[#9E9E9E]">Sort</label>
+                    <select 
+                      value={crmSortBy}
+                      onChange={(e) => setCrmSortBy(e.target.value as any)}
+                      className="bg-white border border-[#E5E5E5] rounded-xl px-3 py-1.5 text-xs focus:ring-2 focus:ring-[#1A1A1A] outline-none"
+                    >
+                      <option value="score">By Score</option>
+                      <option value="date">By Date</option>
+                      <option value="name">By Name</option>
+                    </select>
+                  </div>
+                  <button 
+                    onClick={handleExportCSV}
+                    className="px-4 py-2 bg-white border border-[#E5E5E5] rounded-xl text-sm font-medium hover:bg-[#F5F5F4] transition-all flex items-center gap-2"
+                  >
                     <ArrowUpRight className="w-4 h-4" />
-                    Export to Sheets
+                    Export CSV
                   </button>
                   <button className="px-4 py-2 bg-[#1A1A1A] text-white rounded-xl text-sm font-medium hover:bg-[#333] transition-all">
                     Sync Now
@@ -1204,7 +1490,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E5E5E5]">
-                    {leads.map(lead => (
+                    {crmLeads.map(lead => (
                       <tr key={lead.id} className="hover:bg-[#F5F5F4]/50 transition-colors">
                         <td className="p-4">
                           <p className="font-medium">{lead.companyName}</p>
