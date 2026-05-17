@@ -12,6 +12,7 @@ service cloud.firestore {
     //   - websiteUrl: string (required)
     //   - contactName: string
     //   - email: string
+    //   - emailStatus: string (verified, unverified, unknown)
     //   - status: string
     //   - score: number
     //   - priority: string
@@ -21,6 +22,7 @@ service cloud.firestore {
     //   - createdAt: string
     //   - openedAt: string
     //   - isOpened: bool
+    //   - activityHistory: list of objects
     //   - uid: string (required, owner)
     //
     // ===============================================================
@@ -55,12 +57,21 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(fields);
     }
 
+    function isValidActivityLog(log) {
+      return log.id is string &&
+             log.type in ['Analysis', 'Outreach', 'Status Change', 'Note'] &&
+             log.content is string &&
+             log.timestamp is string;
+    }
+
     function isValidLead(data) {
       return data.companyName is string && data.companyName.size() > 0 && data.companyName.size() < 200 &&
              data.websiteUrl is string && data.websiteUrl.size() > 0 && data.websiteUrl.size() < 500 &&
              data.uid is string && data.uid == request.auth.uid &&
              (!('score' in data) || data.score is number) &&
-             (!('email' in data) || data.email is string);
+             (!('email' in data) || data.email is string) &&
+             (!('emailStatus' in data) || data.emailStatus in ['verified', 'unverified', 'unknown']) &&
+             (!('activityHistory' in data) || (data.activityHistory is list && data.activityHistory.size() < 100));
     }
 
     // ===============================================================

@@ -39,26 +39,37 @@ export async function discoverLeads(niche: string, city: string, count: number =
 
   const model = "gemini-3-flash-preview";
   
-  const prompt = `Find ${count} ${niche} businesses in ${city} using Google Maps.
-  For each business you find, you MUST extract the official website URL and contact email.
+  const prompt = `Find at least ${count} ${niche} businesses in ${city} using Google Maps that are highly likely to need professional web design services. 
+  
+  PRIORITIZE these two categories of businesses:
+  1. HIGH-POTENTIAL WITHOUT WEBSITE: Businesses that DO NOT have a website listed on Google Maps but have high ratings (4.0+ stars) and positive reviews. These are successful businesses that are missing a digital presence.
+  2. OUTDATED/BROKEN WEBSITES: Businesses that have a website listed, but it appears outdated, non-mobile-friendly, or potentially broken based on their online presence or search results.
+  
+  CRITICAL REQUIREMENT: For EVERY business you find, you MUST extract BOTH a verified contact email AND a primary phone number. 
+  - If you cannot find BOTH an email and a phone number for a business, DO NOT include it in the results.
+  - Search their official website, Google Business Profile, or verified business directories (e.g., Yelp, Yellow Pages, LinkedIn).
   
   Instructions for extraction:
   - companyName: The official brand/business name.
-  - websiteUrl: The official website link listed on their Google Maps profile. If not found, search for "[Business Name] [City] official website".
-  - phone: The primary contact phone number from their Google Business Profile or official website.
+  - websiteUrl: The official website link listed on their Google Maps profile. If not found, you MUST search for "[Business Name] [City] official website" to find it. If definitely no website exists after searching, return "none".
+  - websiteStatus: Set to "none" if they have no website, or "poor" if it's outdated/broken.
+  - isVerifiedNoWebsite: Set to true ONLY if you have searched and confirmed they definitely do not have an official website.
+  - phone: The primary contact phone number. MUST NOT be empty.
   - address: The full physical address.
   - mapsUrl: The Google Maps URL provided by the tool.
-  - email: The official contact email. Search their official website, Google Business Profile, or verified business directories (e.g., Yelp, Yellow Pages).
+  - email: The official contact email. MUST NOT be empty.
   - jobTitle: The job title of a key contact person if explicitly listed.
   - socialMedia: An object containing links to their official social media profiles if explicitly listed.
-
+  - reviewSnippets: An array of strings containing short snippets of recent reviews if available.
+  - painPoints: An array of strings identifying why they need a website (e.g., "No online presence despite great reviews", "Outdated mobile experience", "Missing lead capture").
+  
   CRITICAL AUTHENTICITY & ANTI-HALLUCINATION RULE: 
   - ONLY include businesses you successfully found using the Google Maps tool.
   - Do NOT guess, predict, or hallucinate any details.
   - Phone numbers and emails MUST be authentic and directly sourced from the business's own pages or verified profiles.
-  - If a verified detail is not found, return an empty string or empty object.
   - Ensure the "mapsUrl" matches the tool's output exactly.
-
+  - Return exactly ${count} results if possible, but prioritize quality and authenticity.
+  
   IMPORTANT: You MUST return the results as a JSON array of objects inside a \`\`\`json code block. 
   Do not include any other text outside the code block.
   `;
@@ -78,9 +89,9 @@ export async function discoverLeads(niche: string, city: string, count: number =
       },
     }));
 
-    console.log("Gemini Response:", response);
-    const text = response.text;
-    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || text.match(/```\n([\s\S]*?)\n```/);
+    console.log("Gemini Response:", JSON.stringify(response, null, 2));
+    const text = response.text || "";
+    const jsonMatch = text ? (text.match(/```json\n([\s\S]*?)\n```/) || text.match(/```\n([\s\S]*?)\n```/)) : null;
     let parsedLeads: Partial<Lead>[] = [];
 
     if (jsonMatch) {
@@ -130,7 +141,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
             companyName: chunk.title || lead.companyName, // Prioritize tool's title
             mapsUrl: chunk.uri,
             emailStatus,
-            reviewSnippets: (chunk.placeAnswerSources as any[])?.map((s: any) => s.reviewSnippets).flat().filter(Boolean)
+            reviewSnippets: (chunk.placeAnswerSources as any[])?.flatMap((s: any) => s.reviewSnippets || []).filter(Boolean) || []
           });
           // Mark as processed
           realBusinesses.delete(lead.mapsUrl);
@@ -146,7 +157,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
           phone: "",
           address: "",
           email: "",
-          reviewSnippets: (chunk.placeAnswerSources as any[])?.map((s: any) => s.reviewSnippets).flat().filter(Boolean)
+          reviewSnippets: (chunk.placeAnswerSources as any[])?.flatMap((s: any) => s.reviewSnippets || []).filter(Boolean) || []
         });
       });
     } else if (parsedLeads.length > 0) {
@@ -163,15 +174,18 @@ export async function discoverLeads(niche: string, city: string, count: number =
   }
 }
 
-export async function analyzeWebsite(url: string, companyName: string): Promise<LeadAnalysis & { email?: string, websiteUrl?: string }> {
+export async function analyzeWebsite(url: string, companyName: string): Promise<LeadAnalysis & { email?: string, websiteUrl?: string, isVerifiedNoWebsite: boolean }> {
   const model = "gemini-3-flash-preview";
   
   const prompt = `
     Analyze the website ${url} for the company ${companyName} based on the LOOPER OS Full Rubric.
     
     CRITICAL: You MUST attempt to find the official contact email and verify the official website URL.
-    If the provided URL is 'none' or looks incorrect, use Google Search to find the official website for ${companyName}.
+    If the provided URL is 'none', empty, or looks incorrect (e.g., a generic directory link), use Google Search to find the official website for ${companyName}.
     Search for "${companyName} official website" and "${companyName} contact email".
+    
+    If you find a website that was previously missing, update the "websiteUrl" field in your response.
+    If you confirm that NO website exists after a thorough search, set "isVerifiedNoWebsite" to true.
     
     Rubric Categories & Criteria:
     1. Technical Performance (30%): Not mobile responsive, Slow page speed (>3s LCP), No HTTPS/SSL, Outdated CMS/plugins, Broken links/404s.
@@ -179,17 +193,7 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
     3. SEO & Visibility (25%): Poor/missing keyword relevance, No local SEO / GMB link, Missing/poor meta tags, Stale content (no updates 6mo+).
     4. Design & UX (15%): Poor visual hierarchy, Outdated layout (tables, Flash), Inconsistent branding, WCAG accessibility issues.
     
-    Return the result in JSON format matching this structure:
-    {
-      "technical": { "mobileResponsiveness": number, "pageLoadSpeed": number, "security": number, "outdatedCms": number, "brokenLinks": number },
-      "design": { "visualHierarchy": number, "ctaClarity": number, "accessibility": number, "modernLayout": number, "consistency": number },
-      "business": { "leadCaptureForms": number, "aiChatbot": number, "socialProof": number, "ecommerce": number, "analytics": number },
-      "seo": { "metaTagOptimization": number, "contentFreshness": number, "keywordRelevance": number, "localSeo": number },
-      "summary": "string",
-      "recommendations": ["string"],
-      "email": "string (optional, only if found)",
-      "websiteUrl": "string (optional, only if verified/corrected)"
-    }
+    Score each sub-criterion from 0 to 100.
   `;
 
   const response = await withRetry(() => ai.models.generateContent({
@@ -197,6 +201,63 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
     contents: prompt,
     config: {
       responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          technical: {
+            type: Type.OBJECT,
+            properties: {
+              mobileResponsiveness: { type: Type.NUMBER },
+              pageLoadSpeed: { type: Type.NUMBER },
+              security: { type: Type.NUMBER },
+              outdatedCms: { type: Type.NUMBER },
+              brokenLinks: { type: Type.NUMBER }
+            },
+            required: ["mobileResponsiveness", "pageLoadSpeed", "security", "outdatedCms", "brokenLinks"]
+          },
+          design: {
+            type: Type.OBJECT,
+            properties: {
+              visualHierarchy: { type: Type.NUMBER },
+              ctaClarity: { type: Type.NUMBER },
+              accessibility: { type: Type.NUMBER },
+              modernLayout: { type: Type.NUMBER },
+              consistency: { type: Type.NUMBER }
+            },
+            required: ["visualHierarchy", "ctaClarity", "accessibility", "modernLayout", "consistency"]
+          },
+          business: {
+            type: Type.OBJECT,
+            properties: {
+              leadCaptureForms: { type: Type.NUMBER },
+              aiChatbot: { type: Type.NUMBER },
+              socialProof: { type: Type.NUMBER },
+              ecommerce: { type: Type.NUMBER },
+              analytics: { type: Type.NUMBER }
+            },
+            required: ["leadCaptureForms", "aiChatbot", "socialProof", "ecommerce", "analytics"]
+          },
+          seo: {
+            type: Type.OBJECT,
+            properties: {
+              metaTagOptimization: { type: Type.NUMBER },
+              contentFreshness: { type: Type.NUMBER },
+              keywordRelevance: { type: Type.NUMBER },
+              localSeo: { type: Type.NUMBER }
+            },
+            required: ["metaTagOptimization", "contentFreshness", "keywordRelevance", "localSeo"]
+          },
+          summary: { type: Type.STRING },
+          recommendations: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          email: { type: Type.STRING },
+          websiteUrl: { type: Type.STRING },
+          isVerifiedNoWebsite: { type: Type.BOOLEAN }
+        },
+        required: ["technical", "design", "business", "seo", "summary", "recommendations", "isVerifiedNoWebsite"]
+      },
       tools: [{ googleSearch: {} }],
       toolConfig: { includeServerSideToolInvocations: true }
     },
@@ -259,7 +320,6 @@ export async function generateOutreach(lead: Lead): Promise<{ subject: string, b
     6. Demo Offer: "To illustrate this, I've put together a pre-built demo concept tailored for ${lead.companyName}, demonstrating how these improvements could look and function. It addresses the identified pain points and highlights a modern, [Niche]-centric design."
     7. CTA: "Would you be open to a brief 10-minute call next week to see this demo concept?"
     8. Sign-off: "Best regards,\nJackson\nDCYPHERNET"
-    9. Footer: "Add this footer at the very end of the email body:\n\nSent via LOOPER OS - Powered by DCYPHERNET\n© 2026 LOOPER OS. All rights reserved.\nLagos, Nigeria | Specialized Smart Web Solutions\nwww.dcyphernet.com"
 
     Tone: Professional, inspiring, and value-first. Do not sound like a generic sales pitch. Use the specific analysis details to prove you've actually looked at their site.
 
@@ -318,4 +378,50 @@ export async function generateRelumeUrl(lead: Lead): Promise<string> {
   
   const encodedBrief = encodeURIComponent(brief);
   return `https://relume.io/app/project/create?brief=${encodedBrief}&via=gpt`;
+}
+
+export async function generateFollowUp(lead: Lead): Promise<{ subject: string, body: string }> {
+  const model = "gemini-3-flash-preview";
+  
+  const prompt = `
+    Generate a personalized follow-up email for ${lead.contactName || 'there'} at ${lead.companyName}.
+    
+    Context:
+    - Company: ${lead.companyName}
+    - Previous Outreach: ${lead.outreachMessage || 'Sent initial proposal'}
+    - Website Status: ${lead.websiteStatus}
+    - Analysis Summary: ${lead.analysis?.summary || 'No analysis available'}
+    
+    Follow-up Strategy:
+    1. Acknowledge the previous email.
+    2. Briefly reiterate the value (fast, mobile-first websites, 24/7 sales engine).
+    3. Mention the demo concept again.
+    4. Keep it shorter and more direct than the first email.
+    5. CTA: Ask for a quick chat or a simple "yes" to send over the demo link.
+    
+    Sign-off: "Best regards,\nJackson\nDCYPHERNET"
+
+    IMPORTANT: Return the result as a JSON object with "subject" and "body" keys. 
+    Wrap the JSON in a \`\`\`json code block.
+  `;
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: { responseMimeType: "application/json" }
+  }));
+
+  try {
+    const result = JSON.parse(response.text);
+    return {
+      subject: result.subject || `Following up: ${lead.companyName} x DCYPHERNET`,
+      body: result.body || response.text
+    };
+  } catch (e) {
+    console.error("Failed to parse follow-up JSON:", e);
+    return {
+      subject: `Following up: ${lead.companyName} x DCYPHERNET`,
+      body: response.text
+    };
+  }
 }

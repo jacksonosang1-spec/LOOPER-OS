@@ -9,6 +9,7 @@
         "websiteUrl": { "type": "string" },
         "contactName": { "type": "string" },
         "email": { "type": "string" },
+        "emailStatus": { "type": "string", "enum": ["verified", "unverified", "unknown"] },
         "status": { "type": "string" },
         "score": { "type": "number" },
         "priority": { "type": "string" },
@@ -18,6 +19,18 @@
         "createdAt": { "type": "string" },
         "openedAt": { "type": "string" },
         "isOpened": { "type": "boolean" },
+        "activityHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "enum": ["Analysis", "Outreach", "Status Change", "Note"] },
+              "content": { "type": "string" },
+              "timestamp": { "type": "string" }
+            }
+          }
+        },
         "uid": { "type": "string" }
       },
       "required": ["companyName", "websiteUrl", "uid"]
