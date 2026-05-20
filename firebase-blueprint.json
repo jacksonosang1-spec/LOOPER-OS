@@ -31,6 +31,21 @@
             }
           }
         },
+        "replies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "from": { "type": "string" },
+              "content": { "type": "string" },
+              "snippet": { "type": "string" },
+              "timestamp": { "type": "string" },
+              "isInterested": { "type": "boolean" },
+              "followUpDraft": { "type": "string" }
+            }
+          }
+        },
         "uid": { "type": "string" }
       },
       "required": ["companyName", "websiteUrl", "uid"]

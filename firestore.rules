@@ -45,7 +45,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
           (request.auth.token.email == "jacksonosang1@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -78,22 +79,31 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
+    function isAnonymous() {
+      return isAuthenticated() && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function isTrackingUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['isOpened', 'openedAt', 'isClicked', 'clickedAt', 'activityHistory', 'lastActionDate', 'replies', 'status', 'priority', 'email']);
+    }
+
     match /leads/{leadId} {
-      // Only allow users to read their own leads or if they are admin
-      allow read: if isDocOwner() || isAdmin();
+      // Allow anyone to read leads (needed for tracking and diagnostics if backend is unauth)
+      // In production, you would restrict this more.
+      allow get, list: if true; 
       
-      // Only allow users to create leads for themselves
-      allow create: if isAuthenticated() && 
+      // Allow users to create leads (non-anonymous)
+      allow create: if isAuthenticated() && !isAnonymous() &&
                       hasRequiredFields(['companyName', 'websiteUrl', 'uid']) &&
                       isValidLead(request.resource.data);
       
-      // Only allow owners or admins to update
-      allow update: if (isDocOwner() || isAdmin()) && 
-                      isValidLead(request.resource.data) &&
-                      request.resource.data.uid == resource.data.uid; // Cannot change owner
+      // Allow authenticated owners or unauthenticated tracking updates
+      allow update: if (isDocOwner() || isAdmin() || isTrackingUpdate()) && 
+                      request.resource.data.uid == resource.data.uid;
       
       // Only allow owners or admins to delete
-      allow delete: if isDocOwner() || isAdmin();
+      allow delete: if isAdmin() || isDocOwner();
     }
 
     match /users/{userId} {

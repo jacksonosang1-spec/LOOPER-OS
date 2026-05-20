@@ -27,7 +27,10 @@ import {
   Calendar,
   Check,
   RefreshCw,
-  Menu
+  Menu,
+  Wand2,
+  Copy,
+  RotateCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
@@ -325,62 +328,31 @@ function AppContent() {
     try {
       // 1. Check Pixel Tracking (Opens/Clicks)
       try {
-        const response = await fetch('/api/leads/engagement-status');
+        const response = await fetch('/api/leads/activity-summary');
         if (response.ok) {
           const data = await response.json();
           setTrackingStatus(data);
-          
-          const currentLeads = leadsRef.current;
-          
-          // Update Firestore for opens
-          for (const [leadId, openedAt] of Object.entries(data.opened)) {
-            const lead = currentLeads.find(l => l.id === leadId);
-            if (lead && !lead.isOpened) {
-              const newLog: ActivityLog = {
-                id: Math.random().toString(36).substr(2, 9),
-                type: 'Outreach',
-                content: `Email opened at ${new Date(openedAt as string).toLocaleString()}`,
-                timestamp: new Date().toISOString(),
-              };
-              
-              await updateDoc(doc(db, 'leads', leadId), {
-                isOpened: true,
-                openedAt,
-                activityHistory: [newLog, ...(lead.activityHistory || [])],
-                lastActionDate: new Date().toISOString().split('T')[0]
-              });
-            }
-          }
-
-          // Update Firestore for clicks
-          for (const [leadId, clickedAt] of Object.entries(data.clicked)) {
-            const lead = currentLeads.find(l => l.id === leadId);
-            if (lead && !lead.isClicked) {
-              const newLog: ActivityLog = {
-                id: Math.random().toString(36).substr(2, 9),
-                type: 'Outreach',
-                content: `Link clicked at ${new Date(clickedAt as string).toLocaleString()}`,
-                timestamp: new Date().toISOString(),
-              };
-              
-              await updateDoc(doc(db, 'leads', leadId), {
-                isClicked: true,
-                clickedAt,
-                activityHistory: [newLog, ...(lead.activityHistory || [])],
-                lastActionDate: new Date().toISOString().split('T')[0]
-              });
-            }
-          }
         } else {
-          console.warn(`Engagement status check failed with status: ${response.status}`);
+          if (response.status !== 404) {
+             console.warn(`Activity summary check failed with status: ${response.status}`);
+          }
         }
-      } catch (err) {
-        console.error('Failed to fetch engagement status:', err);
+      } catch (err: any) {
+        // Silent fail for network errors during background polling
+        if (err?.name !== 'TypeError' || !err?.message?.includes('fetch')) {
+          console.error('Failed to fetch activity summary:', err);
+        }
       }
 
       // 2. Check Gmail Replies
       if (isGmailConnected) {
-        const sentLeads = leadsRef.current.filter(l => (l.status === 'Outreach Sent' || l.status === 'Follow-up Sent') && l.email);
+        const sentLeads = leadsRef.current.filter(l => 
+          (l.status === 'Outreach Sent' || 
+           l.status === 'Follow-up Sent' || 
+           l.status === 'Replied' || 
+           (l.replies && l.replies.length > 0)) && 
+          (l.email || l.companyName)
+        );
         if (sentLeads.length > 0) {
           try {
             const replyResponse = await fetch('/api/gmail/check-replies', {
@@ -389,8 +361,9 @@ function AppContent() {
               body: JSON.stringify({
                 leads: sentLeads.map(l => ({
                   id: l.id,
-                  email: l.email,
-                  sentAt: l.deliveredAt || l.lastActionDate
+                  email: l.email || '',
+                  companyName: l.companyName,
+                  sentAt: l.deliveredAt || l.lastActionDate || l.createdAt || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString()
                 }))
               })
             });
@@ -633,7 +606,7 @@ function AppContent() {
       console.error('Failed to logout from Gmail:', error);
     }
   };
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'settings' | 'crm' | 'outreach'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'settings' | 'crm' | 'outreach' | 'responses'>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
   const [crmFilterStatus, setCrmFilterStatus] = useState<string>('All');
   const [crmSortBy, setCrmSortBy] = useState<'score' | 'date' | 'name'>('score');
@@ -1106,6 +1079,12 @@ function AppContent() {
             onClick={() => { setActiveTab('outreach'); setIsMobileMenuOpen(false); }} 
           />
           <NavItem 
+            icon={<MessageSquare />} 
+            label="Responses"
+            active={activeTab === 'responses'} 
+            onClick={() => { setActiveTab('responses'); setIsMobileMenuOpen(false); }} 
+          />
+          <NavItem 
             icon={<BarChart3 />} 
             label="CRM"
             active={activeTab === 'crm'} 
@@ -1179,6 +1158,118 @@ function AppContent() {
         </header>
 
         <div className="p-4 md:p-12 max-w-[1600px] mx-auto">
+          {activeTab === 'responses' && (
+            <ResponseDashboard 
+              leads={leads} 
+              isGmailConnected={isGmailConnected}
+              handleConnectGmail={handleConnectGmail}
+              onDraftFollowUp={async (leadId, replyId) => {
+                try {
+                  const response = await fetch('/api/leads/generate-draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leadId, replyId })
+                  });
+                  if (response.ok) {
+                    const data = await response.json();
+                    if (!data.draft) throw new Error('No draft returned in response');
+                    
+                    const { draft, subject } = data;
+                    const targetLead = leads.find(l => l.id === leadId);
+                    if (targetLead && draft) {
+                      const updatedReplies = (targetLead.replies || []).map((r: any) => 
+                        (r.id === replyId || r.messageId === replyId) ? { ...r, followUpDraft: draft, followUpSubject: subject } : r
+                      );
+                      await updateDoc(doc(db, 'leads', leadId), {
+                        replies: updatedReplies
+                      });
+                      toast.success('Follow-up draft generated!');
+                    }
+                  } else {
+                    const errData = await response.json().catch(() => ({ error: 'Unknown API error' }));
+                    toast.error(`Failed to generate draft: ${errData.error || response.statusText}`);
+                  }
+                } catch (e: any) {
+                  toast.error('Error generating draft: ' + e.message);
+                }
+              }}
+              onSendResponse={async (lead, replyId, subject, body, threadId, originalMessageId) => {
+                if (!isGmailConnected) {
+                  handleConnectGmail();
+                  return;
+                }
+                setIsSendingEmail(true);
+                try {
+                  const extractEmailAddress = (str: string | undefined | null): string | null => {
+                    if (!str) return null;
+                    const match = str.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    return match ? match[0].trim() : null;
+                  };
+
+                  const reply = lead.replies?.find((r: any) => r.id === replyId || r.messageId === replyId);
+                  let recipientEmail = extractEmailAddress(lead.email);
+                  
+                  if (!recipientEmail && reply && (reply as any).fromEmail) {
+                    recipientEmail = extractEmailAddress((reply as any).fromEmail);
+                  }
+
+                  if (!recipientEmail && reply && reply.from) {
+                    recipientEmail = extractEmailAddress(reply.from);
+                  }
+                  
+                  if (!recipientEmail && lead.replies) {
+                    for (const r of lead.replies) {
+                      const foundAddress = extractEmailAddress((r as any).fromEmail) || extractEmailAddress((r as any).from);
+                      if (foundAddress) {
+                        recipientEmail = foundAddress;
+                        break;
+                      }
+                    }
+                  }
+
+                  // Delegate resolution to the backend server's robust fallback if we cannot determine it locally.
+                  const response = await fetch('/api/gmail/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      to: recipientEmail || lead.email || '',
+                      subject,
+                      body,
+                      leadId: lead.id,
+                      isInternational: !lead.address?.toLowerCase()?.includes('nigeria'),
+                      threadId,
+                      originalMessageId
+                    })
+                  });
+
+                  if (response.ok) {
+                    const updatedReplies = (lead.replies || []).map((r: any) => 
+                      (r.id === replyId || r.messageId === replyId) ? { ...r, sent: true, sentAt: new Date().toISOString() } : r
+                    );
+                    const updatePayload: any = {
+                      replies: updatedReplies,
+                      lastActionDate: new Date().toISOString().split('T')[0]
+                    };
+                    if (!lead.email && recipientEmail) {
+                      updatePayload.email = recipientEmail;
+                    }
+                    await updateDoc(doc(db, 'leads', lead.id), updatePayload);
+                    await addActivityLog(lead.id, 'Outreach', `Reply follow-up sent: ${subject}`);
+                    toast.success('Reply sent successfully!');
+                  } else {
+                    const data = await response.json();
+                    toast.error(`Failed to send reply: ${data.error}`);
+                  }
+                } catch (error) {
+                  console.error('Failed to send reply:', error);
+                  toast.error('An error occurred while sending the reply.');
+                } finally {
+                  setIsSendingEmail(false);
+                }
+              }}
+            />
+          )}
+
           {activeTab === 'dashboard' && (
             <div className="space-y-12">
               {/* Bento Grid Dashboard */}
@@ -2369,6 +2460,296 @@ function AppContent() {
         )}
       </AnimatePresence>
       <Toaster position="top-right" richColors />
+    </div>
+  );
+}
+
+interface ResponseDashboardProps {
+  leads: Lead[];
+  onDraftFollowUp: (leadId: string, replyId: string) => Promise<void>;
+  onSendResponse: (lead: Lead, replyId: string, subject: string, body: string, threadId?: string, originalMessageId?: string) => Promise<void>;
+  isGmailConnected: boolean;
+  handleConnectGmail: () => Promise<void>;
+}
+
+function ResponseDashboard({ leads, onDraftFollowUp, onSendResponse, isGmailConnected, handleConnectGmail }: ResponseDashboardProps) {
+  const repliedLeads = leads.filter(l => l.replies && l.replies.length > 0);
+  const [selectedReply, setSelectedReply] = useState<{leadId: string, replyId: string} | null>(null);
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [editableDraftSubject, setEditableDraftSubject] = useState("");
+  const [editableDraftBody, setEditableDraftBody] = useState("");
+
+  useEffect(() => {
+    if (selectedReply) {
+      const lead = leads.find(l => l.id === selectedReply.leadId);
+      const reply = lead?.replies?.find(r => (r as any).id === selectedReply.replyId || (r as any).messageId === selectedReply.replyId);
+      
+      let baseSubject = "";
+      if (reply && (reply as any).subject) {
+        baseSubject = (reply as any).subject;
+      } else if (lead && (lead as any).outreachSubject) {
+        baseSubject = (lead as any).outreachSubject;
+      }
+
+      if (baseSubject) {
+        if (!/^re:/i.test(baseSubject)) {
+          baseSubject = `Re: ${baseSubject}`;
+        }
+      } else {
+        baseSubject = `Re: ${lead?.companyName || 'Lead'}`;
+      }
+
+      if (reply && reply.followUpDraft) {
+        setEditableDraftSubject(reply.followUpSubject || baseSubject);
+        setEditableDraftBody(reply.followUpDraft);
+      } else {
+        setEditableDraftSubject(baseSubject);
+        setEditableDraftBody("");
+      }
+    }
+  }, [selectedReply, leads]);
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Outreach Responses</h2>
+          <p className="text-[#9E9E9E]">Track and follow up on incoming replies.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Replies List */}
+        <div className="lg:col-span-1 space-y-4">
+          <div className="bg-white rounded-3xl border border-[#E5E5E5] overflow-hidden shadow-sm">
+            <div className="p-6 border-b border-[#E5E5E5]">
+              <h3 className="font-semibold">All Replies</h3>
+            </div>
+            <div className="divide-y divide-[#E5E5E5] max-h-[600px] overflow-y-auto">
+              {repliedLeads.length === 0 ? (
+                <div className="p-12 text-center text-[#9E9E9E]">
+                  No replies detected yet.
+                </div>
+              ) : (
+                repliedLeads.flatMap(lead => 
+                  (lead.replies || []).map(reply => ({ ...reply, leadId: lead.id, companyName: lead.companyName }))
+                ).sort((a, b) => {
+                  const timeA = new Date((a as any).timestamp || (a as any).repliedAt || (a as any).receivedAt || 0).getTime();
+                  const timeB = new Date((b as any).timestamp || (b as any).repliedAt || (b as any).receivedAt || 0).getTime();
+                  return timeB - timeA;
+                }).map((reply, idx) => {
+                  const replyId = (reply as any).id || (reply as any).messageId || `idx-${idx}`;
+                  const timestamp = (reply as any).timestamp || (reply as any).repliedAt || (reply as any).receivedAt;
+                  
+                  return (
+                    <button 
+                      key={`${reply.leadId}-${replyId}`}
+                      onClick={() => setSelectedReply({leadId: reply.leadId, replyId: (reply as any).id || (reply as any).messageId})}
+                      className={cn(
+                        "w-full p-4 hover:bg-[#F5F5F4] transition-all text-left flex flex-col gap-2",
+                        selectedReply?.replyId === ((reply as any).id || (reply as any).messageId) && "bg-[#F5F5F4] border-l-4 border-[#FF6321]"
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm truncate">{reply.companyName}</span>
+                        <span className="text-[10px] text-[#9E9E9E]">
+                          {timestamp ? new Date(timestamp).toLocaleDateString() : 'Recent'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#4A4A4A] line-clamp-2 italic">"{reply.snippet}"</p>
+                      <div className="flex items-center gap-2">
+                        {reply.isInterested ? (
+                          <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-full flex items-center gap-1">
+                            <Zap className="w-2.5 h-2.5" /> Interested
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-gray-100 text-gray-700 text-[10px] font-bold rounded-full">Neutral</span>
+                        )}
+                        {reply.followUpDraft && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded-full">Drafted</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Reply Details & Follow-up Draft */}
+        <div className="lg:col-span-2">
+          {selectedReply ? (
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={selectedReply.replyId}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white rounded-3xl border border-[#E5E5E5] p-8 shadow-sm h-full"
+              >
+                {(() => {
+                  const lead = leads.find(l => l.id === selectedReply.leadId);
+                  const reply = lead?.replies?.find(r => (r as any).id === selectedReply.replyId || (r as any).messageId === selectedReply.replyId);
+                  
+                  if (!lead || !reply) {
+                    return (
+                      <div className="bg-[#F5F5F4] rounded-3xl border-2 border-dashed border-[#E5E5E5] flex flex-col items-center justify-center py-32 text-center p-8 h-full">
+                        <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-6">
+                          <AlertCircle className="w-8 h-8 text-orange-500" />
+                        </div>
+                        <h3 className="font-bold text-lg mb-2">Details Unavailable</h3>
+                        <p className="text-[#9E9E9E] max-w-xs">We couldn't load the details for this reply.</p>
+                      </div>
+                    );
+                  }
+
+                  const content = (reply as any).content || (reply as any).snippet || "No content available.";
+                  const from = (reply as any).from || "Unknown Sender";
+                  const replyId = (reply as any).id || (reply as any).messageId;
+
+                  return (
+                    <div className="space-y-8">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-xl font-bold">{lead.companyName}</h3>
+                          <p className="text-sm text-[#9E9E9E]">From: {from}</p>
+                        </div>
+                        <button 
+                          onClick={() => setSelectedReply(null)}
+                          className="p-2 hover:bg-[#F5F5F4] rounded-full"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      <div className="p-6 bg-[#F5F5F4] rounded-2xl relative">
+                        <MessageSquare className="absolute -top-3 -left-3 w-8 h-8 text-[#FF6321]/20" />
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-[#9E9E9E] mb-4">Incoming Reply</h4>
+                        <p className="text-lg leading-relaxed whitespace-pre-wrap">{content}</p>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold uppercase tracking-widest text-[#9E9E9E]">Automated Follow-up Draft</h4>
+                          {!reply.followUpDraft && (
+                            <button 
+                              onClick={async () => {
+                                setIsDrafting(true);
+                                await onDraftFollowUp(lead.id, replyId);
+                                setIsDrafting(false);
+                              }}
+                              disabled={isDrafting}
+                              className="bg-[#1A1A1A] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-[#333] transition-all flex items-center gap-2"
+                            >
+                              {isDrafting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                              {isDrafting ? 'Generating...' : 'Generate AI Response'}
+                            </button>
+                          )}
+                        </div>
+
+                        {reply.followUpDraft ? (
+                          <div className="space-y-4">
+                            <div className="p-6 bg-[#F5F5F4] rounded-2xl border border-[#E5E5E5] space-y-4 shadow-inner">
+                              <div className="pb-4 border-b border-[#E5E5E5]">
+                                <label className="text-[10px] font-bold uppercase text-[#9E9E9E] block mb-1">Subject</label>
+                                <input 
+                                  type="text"
+                                  value={editableDraftSubject}
+                                  onChange={(e) => setEditableDraftSubject(e.target.value)}
+                                  className="w-full bg-transparent font-bold text-sm focus:outline-none focus:ring-1 focus:ring-[#FF6321]/50 rounded px-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold uppercase text-[#9E9E9E] block mb-1">Email Body</label>
+                                <textarea 
+                                  value={editableDraftBody}
+                                  onChange={(e) => setEditableDraftBody(e.target.value)}
+                                  rows={12}
+                                  className="w-full bg-transparent text-base leading-relaxed focus:outline-none focus:ring-1 focus:ring-[#FF6321]/50 rounded px-1 resize-none"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              <button 
+                                onClick={async () => {
+                                  if (!editableDraftBody) return;
+                                  setIsSending(true);
+                                  await onSendResponse(
+                                    lead, 
+                                    replyId, 
+                                    editableDraftSubject || `Re: ${lead.companyName}`, 
+                                    editableDraftBody,
+                                    reply.threadId,
+                                    reply.originalMessageId
+                                  );
+                                  setIsSending(false);
+                                }}
+                                disabled={isSending || isDrafting || (reply as any).sent}
+                                className={cn(
+                                  "flex items-center justify-center gap-2 py-3 rounded-xl font-bold transition-all text-sm shadow-lg active:scale-95",
+                                  (reply as any).sent 
+                                    ? "bg-green-500 text-white cursor-default" 
+                                    : "bg-[#FF6321] text-white hover:bg-[#FF6321]/90 shadow-[#FF6321]/20"
+                                )}
+                              >
+                                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : (reply as any).sent ? <Check className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+                                {(reply as any).sent ? 'Sent Successfully' : isSending ? 'Sending...' : 'Send via Gmail'}
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(editableDraftBody);
+                                  toast.success('Draft copied to clipboard!');
+                                }}
+                                className="flex items-center justify-center gap-2 py-3 bg-[#1A1A1A] text-white rounded-xl font-bold hover:bg-[#333] transition-all text-sm"
+                              >
+                                <Copy className="w-4 h-4" /> Copy Draft
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  setIsDrafting(true);
+                                  await onDraftFollowUp(lead.id, replyId);
+                                  setIsDrafting(false);
+                                }}
+                                disabled={isDrafting || isSending}
+                                className="flex items-center justify-center gap-2 py-3 bg-white border border-[#E5E5E5] text-[#1A1A1A] rounded-xl font-bold hover:bg-[#F5F5F4] transition-all text-sm"
+                              >
+                                <RefreshCw className={cn("w-4 h-4", isDrafting && "animate-spin")} /> {isDrafting ? 'Drafting...' : 'Regenerate'}
+                              </button>
+                            </div>
+                            
+                            {!isGmailConnected && ! (reply as any).sent && (
+                              <button 
+                                onClick={handleConnectGmail}
+                                className="w-full py-2 text-xs text-[#FF6321] font-bold hover:underline flex items-center justify-center gap-1"
+                              >
+                                <Globe className="w-3 h-3" /> Connect Gmail to send directly
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="p-12 text-center border-2 border-dashed border-[#E5E5E5] rounded-2xl">
+                            <Zap className="w-8 h-8 text-[#9E9E9E] mx-auto mb-4" />
+                            <p className="text-sm text-[#9E9E9E]">Click generate to create an AI-powered follow-up script.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </motion.div>
+            </AnimatePresence>
+          ) : (
+            <div className="bg-[#F5F5F4] rounded-3xl border-2 border-dashed border-[#E5E5E5] flex flex-col items-center justify-center py-32 text-center p-8 h-full">
+              <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-6">
+                <MessageSquare className="w-8 h-8 text-[#9E9E9E]" />
+              </div>
+              <h3 className="font-bold text-lg mb-2">No Response Selected</h3>
+              <p className="text-[#9E9E9E] max-w-xs">Select a reply from the left to view the conversation and draft follow-ups.</p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

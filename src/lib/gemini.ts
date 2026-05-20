@@ -37,7 +37,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
     throw new Error("Gemini API key is missing. Please configure it in your environment variables on Vercel.");
   }
 
-  const model = "gemini-3-flash-preview";
+  const model = "gemini-3.5-flash";
   
   const prompt = `Find at least ${count} ${niche} businesses in ${city} using Google Maps that are highly likely to need professional web design services. 
   
@@ -175,7 +175,7 @@ export async function discoverLeads(niche: string, city: string, count: number =
 }
 
 export async function analyzeWebsite(url: string, companyName: string): Promise<LeadAnalysis & { email?: string, websiteUrl?: string, isVerifiedNoWebsite: boolean }> {
-  const model = "gemini-3-flash-preview";
+  const model = "gemini-3.5-flash";
   
   const prompt = `
     Analyze the website ${url} for the company ${companyName} based on the LOOPER OS Full Rubric.
@@ -284,7 +284,7 @@ export async function analyzeWebsite(url: string, companyName: string): Promise<
 }
 
 export async function generateOutreach(lead: Lead): Promise<{ subject: string, body: string }> {
-  const model = "gemini-3-flash-preview";
+  const model = "gemini-3.5-flash";
   
   const analysisDetails = lead.analysis ? `
     Detailed Analysis:
@@ -350,7 +350,7 @@ export async function generateOutreach(lead: Lead): Promise<{ subject: string, b
 }
 
 export async function generateRelumeUrl(lead: Lead): Promise<string> {
-  const model = "gemini-3-flash-preview";
+  const model = "gemini-3.5-flash";
   
   const prompt = `
     Based on the company ${lead.companyName}, identify:
@@ -381,7 +381,7 @@ export async function generateRelumeUrl(lead: Lead): Promise<string> {
 }
 
 export async function generateFollowUp(lead: Lead): Promise<{ subject: string, body: string }> {
-  const model = "gemini-3-flash-preview";
+  const model = "gemini-3.5-flash";
   
   const prompt = `
     Generate a personalized follow-up email for ${lead.contactName || 'there'} at ${lead.companyName}.

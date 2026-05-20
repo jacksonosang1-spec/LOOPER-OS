@@ -5,6 +5,21 @@ export interface ActivityLog {
   timestamp: string;
 }
 
+export interface Reply {
+  id: string;
+  from: string;
+  content: string;
+  snippet: string;
+  timestamp: string;
+  isInterested: boolean;
+  followUpDraft?: string;
+  followUpSubject?: string;
+  sent?: boolean;
+  sentAt?: string;
+  threadId?: string;
+  originalMessageId?: string;
+}
+
 export interface Lead {
   id: string;
   companyName: string;
@@ -29,6 +44,7 @@ export interface Lead {
   painPoints: string[];
   lastActionDate: string;
   createdAt: string;
+  sentAt?: string;
   deliveredAt?: string;
   openedAt?: string;
   isOpened?: boolean;
@@ -43,6 +59,7 @@ export interface Lead {
   mapsUrl?: string;
   reviewSnippets?: string[];
   activityHistory?: ActivityLog[];
+  replies?: Reply[];
   uid: string;
 }
 
